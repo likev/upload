@@ -8,6 +8,12 @@ Files are stored in `~/upload/files` (resolved from the running user's home dire
 
 **Run**
 
+Install:
+
+```bash
+pip install "fastapi[standard]"
+```
+
 Production-style:
 
 ```bash
@@ -63,3 +69,15 @@ fastapi dev server.py --host 0.0.0.0 --port 8000
 - Chunked uploads use 1,000,000-byte blocks and can resume by checking existing blocks.
 - Before each upload (multipart, chunk, or URL), the server ensures at least 5 GB free space.
   - If free space is below 5 GB, the largest file in `~/upload/files` is deleted.
+
+**Examples**
+
+The URL upload endpoint includes built-in URL normalization for common sources (arXiv and GitHub) so you can paste a share link and still download the actual file.
+
+- arXiv
+  - `https://arxiv.org/abs/2512.01457v4` → `https://arxiv.org/pdf/2512.01457v4`
+  - `https://arxiv.org/html/2512.01457v4` → `https://arxiv.org/pdf/2512.01457v4`
+- GitHub repo
+  - `https://github.com/moonshotai/attention-residuals` → `https://github.com/moonshotai/attention-residuals/archive/refs/heads/master.zip`
+- GitHub file
+  - `https://github.com/MoonshotAI/Attention-Residuals/blob/master/Attention_Residuals.pdf` → `https://github.com/MoonshotAI/Attention-Residuals/raw/refs/heads/master/Attention_Residuals.pdf`
