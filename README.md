@@ -80,10 +80,15 @@ fastapi dev server.py --host 0.0.0.0 --port 8000
 - Twitter/X article extraction uses a Node script powered by `@the-convocation/twitter-scraper`.
   - The script extracts the tweet/article id from the URL and uses `Scraper.getTweet`.
   - If articles require auth, set `TWITTER_COOKIES` (or `TWITTER_COOKIE`) for the Node fetcher.
+  - If `node` is not on PATH, set `TWITTER_NODE_PATH` to the Node binary.
 
 **Examples**
 
 The URL upload endpoint includes built-in URL normalization for common sources (arXiv and GitHub) so you can paste a share link and still download the actual file.
+
+**Twitter Article Upload**
+
+Twitter/X article and status URLs are fetched via the Node scraper and saved as Markdown. Re-uploading the same URL will refresh the file (it replaces the previous download).
 
 - arXiv
   - `https://arxiv.org/abs/2512.01457v4` → `https://arxiv.org/pdf/2512.01457v4`

@@ -545,14 +545,7 @@
         }
         const data = await res.json();
         log("URL download " + data.status + ": " + data.filename);
-        if (!urlProgressMap.has(data.filename)) {
-          createUrlProgress(data.filename);
-        }
-        if (data.status === "ready") {
-          addResultLink(data.filename, data.url);
-        } else {
-          pollUrlStatus(data.filename);
-        }
+        pollUrlStatus(data.filename);
       } catch (err) {
         log("Error: " + err.message);
       } finally {

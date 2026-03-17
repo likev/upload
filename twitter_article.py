@@ -72,19 +72,21 @@ def _fetch_via_node(raw_url: str) -> Optional[str]:
     script_path = os.path.join(os.path.dirname(__file__), "scripts", "twitter_article_fetch.mjs")
     if not os.path.exists(script_path):
         return None
+    node_bin = os.environ.get("TWITTER_NODE_PATH") or "/root/.nvm/versions/node/v24.13.1/bin/node"
     try:
         result = subprocess.run(
-            ["node", script_path, raw_url],
+            [node_bin, script_path, raw_url],
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
             env=os.environ,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"Node fetch failed: {exc}") from exc
     if result.returncode != 0:
-        return None
+        err = (result.stderr or "").strip()
+        raise RuntimeError(err or "Node fetch failed")
     return result.stdout
 
 
@@ -253,9 +255,11 @@ def _extract_article_from_graphql(data: object) -> Tuple[str, str]:
                     for block in blocks:
                         if not isinstance(block, dict):
                             continue
-                        text = (block.get("text") or "").strip()
-                        if text:
-                            parts.append(text)
+                        text = block.get("text") or ""
+                        if text.strip():
+                            ranges = block.get("inlineStyleRanges") or []
+                            styled = _apply_inline_styles(text, ranges)
+                            parts.append(styled.strip())
                     body = "\n\n".join(parts)
             if not body:
                 body = (article.get("text") or article.get("body") or "").strip()
@@ -281,3 +285,60 @@ def _extract_article_from_graphql(data: object) -> Tuple[str, str]:
 
     visit(data)
     return best_title, best_body
+
+
+def _apply_inline_styles(text: str, ranges: object) -> str:
+    if not text:
+        return ""
+    if not isinstance(ranges, list) or not ranges:
+        return text
+
+    style_markers = {
+        "Bold": "**",
+        "Italic": "*",
+    }
+    style_order = ["Bold", "Italic"]
+    starts = {}
+    ends = {}
+
+    for entry in ranges:
+        if not isinstance(entry, dict):
+            continue
+        style = entry.get("style")
+        if isinstance(style, str):
+            style = style.capitalize()
+        marker = style_markers.get(style)
+        if not marker:
+            continue
+        try:
+            offset = int(entry.get("offset", 0))
+            length = int(entry.get("length", 0))
+        except (TypeError, ValueError):
+            continue
+        if length <= 0:
+            continue
+        start = max(0, offset)
+        end = min(len(text), start + length)
+        if end <= start:
+            continue
+        starts.setdefault(start, []).append(style)
+        ends.setdefault(end, []).append(style)
+
+    active = []
+    out = []
+    for i in range(len(text) + 1):
+        if i in ends:
+            for style in sorted(ends[i], key=lambda s: style_order.index(s), reverse=True):
+                if style in active:
+                    out.append(style_markers[style])
+                    active.remove(style)
+        if i in starts:
+            for style in sorted(starts[i], key=lambda s: style_order.index(s)):
+                if style not in active:
+                    out.append(style_markers[style])
+                    active.append(style)
+        if i < len(text):
+            out.append(text[i])
+    for style in sorted(active, key=lambda s: style_order.index(s), reverse=True):
+        out.append(style_markers[style])
+    return "".join(out)

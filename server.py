@@ -271,14 +271,13 @@ def upload_url(info: UrlUpload):
     dest_path = os.path.join(UPLOAD_DIR, safe_name)
     tmp_path = os.path.join(UPLOAD_DIR, safe_name + URL_PART_SUFFIX)
 
-    if os.path.exists(dest_path):
-        size = os.path.getsize(dest_path)
-        _update_download_info(safe_name, status="ready", downloaded=size, total=size)
-        return {"filename": safe_name, "url": f"./{safe_name}", "status": "ready"}
     if _get_download_info(safe_name).get("status") == "downloading":
         return {"filename": safe_name, "url": f"./{safe_name}", "status": "downloading"}
 
-    if not _ensure_free_space(exclude_names={os.path.basename(tmp_path)}):
+    exclude = {os.path.basename(tmp_path)}
+    if os.path.exists(dest_path):
+        exclude.add(os.path.basename(dest_path))
+    if not _ensure_free_space(exclude_names=exclude):
         return PlainTextResponse("Insufficient storage\n", status_code=507)
 
     _update_download_info(safe_name, status="downloading", downloaded=0, total=None)
@@ -325,8 +324,10 @@ def upload_url(info: UrlUpload):
             os.replace(tmp_path, dest_path)
             size = os.path.getsize(dest_path)
             _update_download_info(safe_name, status="ready", downloaded=size, total=total or size)
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
-            _update_download_info(safe_name, status="failed")
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+            _update_download_info(safe_name, status="failed", error=str(exc))
+        except Exception as exc:
+            _update_download_info(safe_name, status="failed", error=str(exc))
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -363,7 +364,11 @@ def url_status(filename: str):
         size = os.path.getsize(dest_path)
         downloaded = size
         total = total or size
-    return {"status": status, "downloaded": downloaded, "total": total, "url": f"./{safe_name}"}
+    response = {"status": status, "downloaded": downloaded, "total": total, "url": f"./{safe_name}"}
+    error = info.get("error")
+    if error:
+        response["error"] = error
+    return response
 
 
 @app.get("/speed_test/download")
