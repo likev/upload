@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chunked Upload</title>
+  <style>
+    :root {
+      --bg1: #f7f5f2;
+      --bg2: #eef6ff;
+      --panel: #ffffff;
+      --border: #e5e7eb;
+      --text: #1f2937;
+      --muted: #6b7280;
+    }
+    body {
+      font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
+      margin: 24px;
+      color: var(--text);
+      background: linear-gradient(120deg, var(--bg1), var(--bg2));
+    }
+    .row { margin: 12px 0; }
+    .section {
+      margin: 18px 0 24px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    .section h2 { margin: 0 0 10px; font-size: 16px; }
+    #log { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+    .small { color: var(--muted); font-size: 12px; }
+    textarea, input[type="url"], input[type="text"], input[type="number"] {
+      box-sizing: border-box;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+    }
+    button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: #fff; }
+  </style>
+</head>
+<body>
+  <h1>Chunked Upload</h1>
+  <div class="section">
+    <h2>Quick Text</h2>
+    <label for="textInput" class="small">Quick text to .txt</label>
+    <textarea id="textInput" rows="6" style="width: 100%;"></textarea>
+    <div class="row">
+      <button type="button" id="saveTextBtn">Save as .txt</button>
+    </div>
+  </div>
+  <div class="section">
+    <h2>File Upload</h2>
+    <form id="uploadForm">
+      <div class="row">
+        <input type="file" id="files" name="files" multiple />
+      </div>
+      <div class="row">
+        <button type="submit" id="uploadBtn">Upload</button>
+      </div>
+    </form>
+  </div>
+  <div class="section">
+    <h2>URL Upload</h2>
+    <label for="urlInput" class="small">Upload from URL</label>
+    <input type="url" id="urlInput" placeholder="https://example.com/file.bin" style="width: 100%;" />
+    <input type="text" id="urlFilename" placeholder="Optional filename" style="width: 100%; margin-top: 6px;" />
+    <div class="row">
+      <button type="button" id="urlUploadBtn">Fetch URL</button>
+    </div>
+    <div id="urlProgress"></div>
+  </div>
+  <div class="section">
+    <h2>Speed Test</h2>
+    <label for="speedSize" class="small">Size (MB)</label>
+    <input type="number" id="speedSize" min="1" max="200" value="20" style="width: 100%;" />
+    <div class="row">
+      <button type="button" id="downloadTestBtn">Test Download</button>
+      <button type="button" id="uploadTestBtn" style="margin-left: 8px;">Test Upload</button>
+    </div>
+    <div id="speedResult" class="small"></div>
+  </div>
+  <div class="row">
+    <progress id="progress" value="0" max="0" style="width: 100%;"></progress>
+    <div id="progressText" class="small"></div>
+  </div>
+  <div id="fileProgress"></div>
+  <div class="row small">Chunk size: 1,000,000 bytes (1 MB)</div>
+  <div id="results" class="row"></div>
+  <div id="log"></div>
+
+  <script>
+    const CHUNK_SIZE = 1_000_000;
+    const SPEED_MAX_MB = 200;
+    const resultLinks = new Set();
+    const urlProgressMap = new Map();
+
+    function log(msg) {
+      const el = document.getElementById("log");
+      el.textContent += msg + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes)) return "0 B";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let val = bytes;
+      let i = 0;
+      while (val >= 1024 && i < units.length - 1) {
+        val /= 1024;
+        i++;
+      }
+      if (i === 0) return Math.round(val) + " " + units[i];
+      return val.toFixed(1) + " " + units[i];
+    }
+
+    function formatSpeed(bytes, seconds) {
+      if (seconds <= 0) return "0 MB/s";
+      const mbps = (bytes * 8) / 1e6 / seconds;
+      const mbpsBytes = bytes / (1024 * 1024) / seconds;
+      return mbpsBytes.toFixed(2) + " MB/s (" + mbps.toFixed(2) + " Mbps)";
+    }
+
+    function getSpeedSizeBytes() {
+      const input = document.getElementById("speedSize");
+      let mb = parseInt(input.value, 10);
+      if (!Number.isFinite(mb) || mb < 1) mb = 1;
+      if (mb > SPEED_MAX_MB) mb = SPEED_MAX_MB;
+      input.value = String(mb);
+      return mb * 1024 * 1024;
+    }
+
+    function setSpeedResult(text) {
+      document.getElementById("speedResult").textContent = text;
+    }
+
+    function setProgress(done, total) {
+      const bar = document.getElementById("progress");
+      const text = document.getElementById("progressText");
+      bar.max = total;
+      bar.value = done;
+      const pct = total > 0 ? ((done / total) * 100).toFixed(1) : "0.0";
+      text.textContent = done + " / " + total + " bytes (" + pct + "%)";
+    }
+
+    function createFileProgress(file, index) {
+      const wrap = document.createElement("div");
+      wrap.className = "row";
+
+      const label = document.createElement("div");
+      label.className = "small";
+      label.textContent = (index + 1) + ". " + file.name + " (" + file.size + " bytes)";
+
+      const bar = document.createElement("progress");
+      bar.max = file.size;
+      bar.value = 0;
+      bar.style.width = "100%";
+
+      const text = document.createElement("div");
+      text.className = "small";
+      text.textContent = "0 / " + file.size + " bytes (0.0%)";
+
+      wrap.appendChild(label);
+      wrap.appendChild(bar);
+      wrap.appendChild(text);
+
+      document.getElementById("fileProgress").appendChild(wrap);
+      return { bar, text, total: file.size, done: 0 };
+    }
+
+    function updateFileProgress(entry, bytes) {
+      entry.done += bytes;
+      entry.bar.value = entry.done;
+      const pct = entry.total > 0 ? ((entry.done / entry.total) * 100).toFixed(1) : "0.0";
+      entry.text.textContent = entry.done + " / " + entry.total + " bytes (" + pct + "%)";
+    }
+
+    function addResultLink(filename, url) {
+      if (resultLinks.has(filename)) {
+        return;
+      }
+      resultLinks.add(filename);
+      const results = document.getElementById("results");
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const link = document.createElement("a");
+      link.href = url || ("./" + encodeURIComponent(filename));
+      link.textContent = "Download " + filename;
+      link.target = "_blank";
+      link.rel = "noopener";
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Copy link";
+      btn.style.marginLeft = "8px";
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(link.href);
+          btn.textContent = "Copied";
+          setTimeout(() => { btn.textContent = "Copy link"; }, 1200);
+        } catch (e) {
+          log("Copy failed for " + filename);
+        }
+      });
+
+      row.appendChild(link);
+      row.appendChild(btn);
+      results.appendChild(row);
+    }
+
+    function randomId(len) {
+      const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+      let out = "";
+      for (let i = 0; i < len; i++) {
+        out += chars[Math.floor(Math.random() * chars.length)];
+      }
+      return out;
+    }
+
+    function createUrlProgress(filename) {
+      const wrap = document.createElement("div");
+      wrap.className = "row";
+
+      const label = document.createElement("div");
+      label.className = "small";
+      label.textContent = "URL: " + filename;
+
+      const bar = document.createElement("progress");
+      bar.style.width = "100%";
+
+      const text = document.createElement("div");
+      text.className = "small";
+      text.textContent = "Starting...";
+
+      wrap.appendChild(label);
+      wrap.appendChild(bar);
+      wrap.appendChild(text);
+
+      document.getElementById("urlProgress").appendChild(wrap);
+      const entry = { bar, text, total: null, done: 0, status: "downloading" };
+      urlProgressMap.set(filename, entry);
+      return entry;
+    }
+
+    function updateUrlProgress(entry, downloaded, total, status) {
+      entry.done = downloaded || 0;
+      entry.total = total;
+      entry.status = status;
+
+      if (total == null) {
+        entry.bar.removeAttribute("value");
+      } else {
+        entry.bar.max = total;
+        entry.bar.value = Math.min(downloaded, total);
+      }
+
+      if (status === "ready") {
+        entry.text.textContent = "Ready (" + formatBytes(downloaded) + ")";
+        if (total != null) {
+          entry.bar.max = total;
+          entry.bar.value = total;
+        } else {
+          entry.bar.removeAttribute("value");
+        }
+        return;
+      }
+      if (status === "failed") {
+        entry.text.textContent = "Failed";
+        entry.bar.removeAttribute("value");
+        return;
+      }
+
+      if (total != null) {
+        const pct = total > 0 ? ((downloaded / total) * 100).toFixed(1) : "0.0";
+        entry.text.textContent = formatBytes(downloaded) + " / " + formatBytes(total) + " (" + pct + "%)";
+      } else {
+        entry.text.textContent = formatBytes(downloaded) + " downloaded";
+      }
+    }
+
+    async function pollUrlStatus(filename) {
+      let entry = urlProgressMap.get(filename);
+      if (!entry) {
+        entry = createUrlProgress(filename);
+      }
+      while (true) {
+        try {
+          const res = await fetch("./url_status/" + encodeURIComponent(filename));
+          if (!res.ok) {
+            throw new Error("status failed");
+          }
+          const data = await res.json();
+          updateUrlProgress(entry, data.downloaded || 0, data.total, data.status);
+          if (data.status === "ready") {
+            addResultLink(filename, data.url);
+            return;
+          }
+          if (data.status === "failed") {
+            return;
+          }
+        } catch (err) {
+          entry.text.textContent = "Status error";
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+
+    function add(x, y) { return (x + y) | 0; }
+    function rol(x, c) { return (x << c) | (x >>> (32 - c)); }
+    function cmn(q, a, b, x, s, t) {
+      return add(rol(add(add(a, q), add(x, t)), s), b);
+    }
+    function ff(a, b, c, d, x, s, t) {
+      return cmn((b & c) | ((~b) & d), a, b, x, s, t);
+    }
+    function gg(a, b, c, d, x, s, t) {
+      return cmn((b & d) | (c & (~d)), a, b, x, s, t);
+    }
+    function hh(a, b, c, d, x, s, t) {
+      return cmn(b ^ c ^ d, a, b, x, s, t);
+    }
+    function ii(a, b, c, d, x, s, t) {
+      return cmn(c ^ (b | (~d)), a, b, x, s, t);
+    }
+
+    function md5Bytes(bytes) {
+      const len = bytes.length;
+      const n = (((len + 8) >>> 6) << 4) + 16;
+      const words = new Array(n);
+      for (let i = 0; i < n; i++) words[i] = 0;
+      for (let i = 0; i < len; i++) {
+        words[i >> 2] |= bytes[i] << ((i % 4) * 8);
+      }
+      words[len >> 2] |= 0x80 << ((len % 4) * 8);
+      words[n - 2] = len * 8;
+
+      let a = 0x67452301;
+      let b = 0xefcdab89;
+      let c = 0x98badcfe;
+      let d = 0x10325476;
+
+      for (let i = 0; i < n; i += 16) {
+        const aa = a, bb = b, cc = c, dd = d;
+
+        a = ff(a, b, c, d, words[i + 0], 7, -680876936);
+        d = ff(d, a, b, c, words[i + 1], 12, -389564586);
+        c = ff(c, d, a, b, words[i + 2], 17, 606105819);
+        b = ff(b, c, d, a, words[i + 3], 22, -1044525330);
+        a = ff(a, b, c, d, words[i + 4], 7, -176418897);
+        d = ff(d, a, b, c, words[i + 5], 12, 1200080426);
+        c = ff(c, d, a, b, words[i + 6], 17, -1473231341);
+        b = ff(b, c, d, a, words[i + 7], 22, -45705983);
+        a = ff(a, b, c, d, words[i + 8], 7, 1770035416);
+        d = ff(d, a, b, c, words[i + 9], 12, -1958414417);
+        c = ff(c, d, a, b, words[i + 10], 17, -42063);
+        b = ff(b, c, d, a, words[i + 11], 22, -1990404162);
+        a = ff(a, b, c, d, words[i + 12], 7, 1804603682);
+        d = ff(d, a, b, c, words[i + 13], 12, -40341101);
+        c = ff(c, d, a, b, words[i + 14], 17, -1502002290);
+        b = ff(b, c, d, a, words[i + 15], 22, 1236535329);
+
+        a = gg(a, b, c, d, words[i + 1], 5, -165796510);
+        d = gg(d, a, b, c, words[i + 6], 9, -1069501632);
+        c = gg(c, d, a, b, words[i + 11], 14, 643717713);
+        b = gg(b, c, d, a, words[i + 0], 20, -373897302);
+        a = gg(a, b, c, d, words[i + 5], 5, -701558691);
+        d = gg(d, a, b, c, words[i + 10], 9, 38016083);
+        c = gg(c, d, a, b, words[i + 15], 14, -660478335);
+        b = gg(b, c, d, a, words[i + 4], 20, -405537848);
+        a = gg(a, b, c, d, words[i + 9], 5, 568446438);
+        d = gg(d, a, b, c, words[i + 14], 9, -1019803690);
+        c = gg(c, d, a, b, words[i + 3], 14, -187363961);
+        b = gg(b, c, d, a, words[i + 8], 20, 1163531501);
+        a = gg(a, b, c, d, words[i + 13], 5, -1444681467);
+        d = gg(d, a, b, c, words[i + 2], 9, -51403784);
+        c = gg(c, d, a, b, words[i + 7], 14, 1735328473);
+        b = gg(b, c, d, a, words[i + 12], 20, -1926607734);
+
+        a = hh(a, b, c, d, words[i + 5], 4, -378558);
+        d = hh(d, a, b, c, words[i + 8], 11, -2022574463);
+        c = hh(c, d, a, b, words[i + 11], 16, 1839030562);
+        b = hh(b, c, d, a, words[i + 14], 23, -35309556);
+        a = hh(a, b, c, d, words[i + 1], 4, -1530992060);
+        d = hh(d, a, b, c, words[i + 4], 11, 1272893353);
+        c = hh(c, d, a, b, words[i + 7], 16, -155497632);
+        b = hh(b, c, d, a, words[i + 10], 23, -1094730640);
+        a = hh(a, b, c, d, words[i + 13], 4, 681279174);
+        d = hh(d, a, b, c, words[i + 0], 11, -358537222);
+        c = hh(c, d, a, b, words[i + 3], 16, -722521979);
+        b = hh(b, c, d, a, words[i + 6], 23, 76029189);
+        a = hh(a, b, c, d, words[i + 9], 4, -640364487);
+        d = hh(d, a, b, c, words[i + 12], 11, -421815835);
+        c = hh(c, d, a, b, words[i + 15], 16, 530742520);
+        b = hh(b, c, d, a, words[i + 2], 23, -995338651);
+
+        a = ii(a, b, c, d, words[i + 0], 6, -198630844);
+        d = ii(d, a, b, c, words[i + 7], 10, 1126891415);
+        c = ii(c, d, a, b, words[i + 14], 15, -1416354905);
+        b = ii(b, c, d, a, words[i + 5], 21, -57434055);
+        a = ii(a, b, c, d, words[i + 12], 6, 1700485571);
+        d = ii(d, a, b, c, words[i + 3], 10, -1894986606);
+        c = ii(c, d, a, b, words[i + 10], 15, -1051523);
+        b = ii(b, c, d, a, words[i + 1], 21, -2054922799);
+        a = ii(a, b, c, d, words[i + 8], 6, 1873313359);
+        d = ii(d, a, b, c, words[i + 15], 10, -30611744);
+        c = ii(c, d, a, b, words[i + 6], 15, -1560198380);
+        b = ii(b, c, d, a, words[i + 13], 21, 1309151649);
+        a = ii(a, b, c, d, words[i + 4], 6, -145523070);
+        d = ii(d, a, b, c, words[i + 11], 10, -1120210379);
+        c = ii(c, d, a, b, words[i + 2], 15, 718787259);
+        b = ii(b, c, d, a, words[i + 9], 21, -343485551);
+
+        a = add(a, aa);
+        b = add(b, bb);
+        c = add(c, cc);
+        d = add(d, dd);
+      }
+
+      function toHex(num) {
+        let out = "";
+        for (let i = 0; i < 4; i++) {
+          const byte = (num >> (i * 8)) & 0xff;
+          out += ("0" + byte.toString(16)).slice(-2);
+        }
+        return out;
+      }
+
+      return toHex(a) + toHex(b) + toHex(c) + toHex(d);
+    }
+
+    async function md5ArrayBuffer(buf) {
+      return md5Bytes(new Uint8Array(buf));
+    }
+
+    async function checkChunk(filename, blockId, blockMd5, blockSize, totalSize) {
+      const res = await fetch("./check/chunk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          block_id: blockId,
+          block_md5: blockMd5,
+          block_size: blockSize,
+          total_size: totalSize,
+        })
+      });
+      if (!res.ok) {
+        throw new Error("check failed");
+      }
+      const data = await res.json();
+      return Boolean(data.exists);
+    }
+
+    async function uploadChunk(filename, blockId, blockMd5, blockSize, totalSize, arrayBuffer) {
+      const form = new FormData();
+      form.append("filename", filename);
+      form.append("block_id", String(blockId));
+      form.append("block_md5", blockMd5);
+      form.append("block_size", String(blockSize));
+      form.append("total_size", String(totalSize));
+      form.append("file", new Blob([arrayBuffer]), filename);
+
+      const res = await fetch("./upload/chunk", { method: "POST", body: form });
+      if (!res.ok) {
+        throw new Error("upload failed");
+      }
+    }
+
+    async function uploadFile(file, onChunkDone, onFileChunkDone) {
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      for (let blockId = 0, offset = 0; offset < file.size; blockId++, offset += CHUNK_SIZE) {
+        const chunk = file.slice(offset, offset + CHUNK_SIZE);
+        const buf = await chunk.arrayBuffer();
+        const md5 = await md5ArrayBuffer(buf);
+
+        const exists = await checkChunk(file.name, blockId, md5, chunk.size, file.size);
+        if (!exists) {
+          await uploadChunk(file.name, blockId, md5, chunk.size, file.size, buf);
+          log("Uploaded " + file.name + " chunk " + (blockId + 1) + "/" + totalChunks);
+        } else {
+          log("Skipped " + file.name + " chunk " + (blockId + 1) + "/" + totalChunks);
+        }
+        onChunkDone(chunk.size);
+        onFileChunkDone(chunk.size);
+      }
+      log("Completed " + file.name);
+    }
+
+    async function runUploads(files) {
+      if (files.length === 0) {
+        log("No files selected");
+        return;
+      }
+      document.getElementById("fileProgress").innerHTML = "";
+      document.getElementById("results").innerHTML = "";
+      resultLinks.clear();
+      const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+      let doneBytes = 0;
+      setProgress(0, totalBytes);
+      document.getElementById("uploadBtn").disabled = true;
+      document.getElementById("saveTextBtn").disabled = true;
+      document.getElementById("urlUploadBtn").disabled = true;
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const perFile = createFileProgress(file, i);
+          log("Starting " + file.name);
+          await uploadFile(file, (bytes) => {
+            doneBytes += bytes;
+            setProgress(doneBytes, totalBytes);
+          }, (bytes) => {
+            updateFileProgress(perFile, bytes);
+          });
+          addResultLink(file.name);
+        }
+      } catch (err) {
+        log("Error: " + err.message);
+      } finally {
+        document.getElementById("uploadBtn").disabled = false;
+        document.getElementById("saveTextBtn").disabled = false;
+        document.getElementById("urlUploadBtn").disabled = false;
+      }
+    }
+
+    async function uploadFromUrl(url, filename) {
+      if (!url) {
+        log("URL is required");
+        return;
+      }
+      document.getElementById("uploadBtn").disabled = true;
+      document.getElementById("saveTextBtn").disabled = true;
+      document.getElementById("urlUploadBtn").disabled = true;
+      try {
+        const res = await fetch("./upload/url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: url, filename: filename || null }),
+        });
+        if (!res.ok) {
+          throw new Error("URL fetch failed");
+        }
+        const data = await res.json();
+        log("URL download " + data.status + ": " + data.filename);
+        if (!urlProgressMap.has(data.filename)) {
+          createUrlProgress(data.filename);
+        }
+        if (data.status === "ready") {
+          addResultLink(data.filename, data.url);
+        } else {
+          pollUrlStatus(data.filename);
+        }
+      } catch (err) {
+        log("Error: " + err.message);
+      } finally {
+        document.getElementById("uploadBtn").disabled = false;
+        document.getElementById("saveTextBtn").disabled = false;
+        document.getElementById("urlUploadBtn").disabled = false;
+      }
+    }
+
+    async function runDownloadSpeedTest() {
+      const btnDown = document.getElementById("downloadTestBtn");
+      const btnUp = document.getElementById("uploadTestBtn");
+      btnDown.disabled = true;
+      btnUp.disabled = true;
+      const sizeBytes = getSpeedSizeBytes();
+      setSpeedResult("Running download test...");
+      try {
+        const start = performance.now();
+        const res = await fetch("./speed_test/download?size=" + sizeBytes);
+        if (!res.ok || !res.body) {
+          throw new Error("download failed");
+        }
+        const reader = res.body.getReader();
+        let received = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.length;
+        }
+        const seconds = (performance.now() - start) / 1000;
+        setSpeedResult("Download: " + formatSpeed(received, seconds) + " for " + formatBytes(received));
+      } catch (err) {
+        setSpeedResult("Download test failed");
+      } finally {
+        btnDown.disabled = false;
+        btnUp.disabled = false;
+      }
+    }
+
+    async function runUploadSpeedTest() {
+      const btnDown = document.getElementById("downloadTestBtn");
+      const btnUp = document.getElementById("uploadTestBtn");
+      btnDown.disabled = true;
+      btnUp.disabled = true;
+      const sizeBytes = getSpeedSizeBytes();
+      setSpeedResult("Running upload test...");
+      try {
+        const payload = new Uint8Array(sizeBytes);
+        const start = performance.now();
+        const res = await fetch("./speed_test/upload", { method: "POST", body: payload });
+        if (!res.ok) {
+          throw new Error("upload failed");
+        }
+        await res.json();
+        const seconds = (performance.now() - start) / 1000;
+        setSpeedResult("Upload: " + formatSpeed(sizeBytes, seconds) + " for " + formatBytes(sizeBytes));
+      } catch (err) {
+        setSpeedResult("Upload test failed");
+      } finally {
+        btnDown.disabled = false;
+        btnUp.disabled = false;
+      }
+    }
+
+    document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("files");
+      const files = Array.from(input.files || []);
+      await runUploads(files);
+    });
+
+    document.getElementById("saveTextBtn").addEventListener("click", async () => {
+      const text = document.getElementById("textInput").value || "";
+      const name = randomId(6) + ".txt";
+      const file = new File([text], name, { type: "text/plain" });
+      await runUploads([file]);
+    });
+
+    document.getElementById("urlUploadBtn").addEventListener("click", async () => {
+      const url = document.getElementById("urlInput").value.trim();
+      const filename = document.getElementById("urlFilename").value.trim();
+      await uploadFromUrl(url, filename);
+    });
+
+    document.getElementById("downloadTestBtn").addEventListener("click", async () => {
+      await runDownloadSpeedTest();
+    });
+
+    document.getElementById("uploadTestBtn").addEventListener("click", async () => {
+      await runUploadSpeedTest();
+    });
+  </script>
+</body>
+</html>
