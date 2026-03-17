@@ -14,6 +14,12 @@ Install:
 pip install "fastapi[standard]"
 ```
 
+Optional (Twitter/X article extraction):
+
+```bash
+npm install
+```
+
 Production-style:
 
 ```bash
@@ -48,6 +54,8 @@ fastapi dev server.py --host 0.0.0.0 --port 8000
     - arXiv `https://arxiv.org/abs/...` or `https://arxiv.org/html/...` are downloaded as `https://arxiv.org/pdf/...` with a `.pdf` filename.
     - GitHub repo `https://github.com/{owner}/{repo}` is downloaded as `.../archive/refs/heads/master.zip` (or `.../tree/{branch}` to the branch zip).
     - GitHub file `https://github.com/{owner}/{repo}/blob/{branch}/path` is downloaded as `.../raw/refs/heads/{branch}/path`.
+    - Twitter/X articles `https://twitter.com/i/article...`, `https://twitter.com/i/articles/...`, or `https://x.com/{user}/article/...` are downloaded as a `.md` file extracted from the article title and body.
+    - Twitter/X status URLs are supported; if the tweet links to an article, the article content is used.
 - `GET /url_status/{filename}`
   - Returns JSON status for a URL download: `status`, `downloaded`, `total`, `url`.
 - `GET /speed_test/download`
@@ -69,6 +77,9 @@ fastapi dev server.py --host 0.0.0.0 --port 8000
 - Chunked uploads use 1,000,000-byte blocks and can resume by checking existing blocks.
 - Before each upload (multipart, chunk, or URL), the server ensures at least 5 GB free space.
   - If free space is below 5 GB, the largest file in `~/upload/files` is deleted.
+- Twitter/X article extraction uses a Node script powered by `@the-convocation/twitter-scraper`.
+  - The script extracts the tweet/article id from the URL and uses `Scraper.getTweet`.
+  - If articles require auth, set `TWITTER_COOKIES` (or `TWITTER_COOKIE`) for the Node fetcher.
 
 **Examples**
 
@@ -81,3 +92,9 @@ The URL upload endpoint includes built-in URL normalization for common sources (
   - `https://github.com/moonshotai/attention-residuals` → `https://github.com/moonshotai/attention-residuals/archive/refs/heads/master.zip`
 - GitHub file
   - `https://github.com/MoonshotAI/Attention-Residuals/blob/master/Attention_Residuals.pdf` → `https://github.com/MoonshotAI/Attention-Residuals/raw/refs/heads/master/Attention_Residuals.pdf`
+- Twitter/X article
+  - `https://twitter.com/i/article/1234567890` → `twitter-article-1234567890.md`
+  - `https://twitter.com/i/articles/1234567890` → `twitter-article-1234567890.md`
+  - `https://x.com/RayDalio/article/1234567890` → `twitter-article-1234567890.md`
+- Twitter/X status
+  - `https://x.com/user/status/1234567890` → `twitter-article-1234567890.md`

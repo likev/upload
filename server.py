@@ -12,6 +12,7 @@ from typing import List, Optional
 
 import arxiv
 import github
+import twitter_article
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -247,10 +248,15 @@ def upload_url(info: UrlUpload):
     if parsed.scheme not in {"http", "https"}:
         return PlainTextResponse("Bad request\n", status_code=400)
 
+    is_twitter_article = twitter_article.is_twitter_article_url(raw_url)
+    twitter_name = twitter_article.suggested_filename(raw_url) if is_twitter_article else None
+
     raw_url, suggested_name = github.rewrite_github_url(raw_url)
     raw_url, arxiv_name = arxiv.rewrite_arxiv_url(raw_url)
     if not suggested_name:
         suggested_name = arxiv_name
+    if not suggested_name:
+        suggested_name = twitter_name
     parsed = urllib.parse.urlparse(raw_url)
 
     if info.filename:
@@ -280,6 +286,21 @@ def upload_url(info: UrlUpload):
     def _worker():
         try:
             opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
+            if is_twitter_article:
+                markdown = twitter_article.fetch_article_markdown(raw_url)
+                if markdown is None:
+                    _update_download_info(safe_name, status="failed")
+                    return
+                data = markdown.encode("utf-8")
+                total = len(data)
+                _update_download_info(safe_name, total=total)
+                with open(tmp_path, "wb") as f:
+                    f.write(data)
+                    _update_download_info(safe_name, downloaded=total)
+                os.replace(tmp_path, dest_path)
+                _update_download_info(safe_name, status="ready", downloaded=total, total=total)
+                return
+
             with opener.open(raw_url) as resp:
                 if resp.status and resp.status >= 400:
                     _update_download_info(safe_name, status="failed")
