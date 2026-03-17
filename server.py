@@ -10,6 +10,7 @@ import urllib.request
 import uuid
 from typing import List, Optional
 
+import arxiv
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -245,10 +246,14 @@ def upload_url(info: UrlUpload):
     if parsed.scheme not in {"http", "https"}:
         return PlainTextResponse("Bad request\n", status_code=400)
 
+    raw_url, suggested_name = arxiv.rewrite_arxiv_url(raw_url)
+    parsed = urllib.parse.urlparse(raw_url)
+
     if info.filename:
         safe_name = _safe_basename(info.filename)
     else:
-        safe_name = _safe_basename(os.path.basename(parsed.path))
+        candidate = suggested_name or os.path.basename(parsed.path)
+        safe_name = _safe_basename(candidate)
     if not safe_name:
         safe_name = uuid.uuid4().hex[:6]
 
@@ -388,4 +393,3 @@ def download_file(filename: str):
             headers={"Content-Disposition": "inline"},
         )
     return FileResponse(file_path, filename=safe_name)
-
