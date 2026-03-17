@@ -11,6 +11,7 @@ import uuid
 from typing import List, Optional
 
 import arxiv
+import github
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -246,7 +247,10 @@ def upload_url(info: UrlUpload):
     if parsed.scheme not in {"http", "https"}:
         return PlainTextResponse("Bad request\n", status_code=400)
 
-    raw_url, suggested_name = arxiv.rewrite_arxiv_url(raw_url)
+    raw_url, suggested_name = github.rewrite_github_url(raw_url)
+    raw_url, arxiv_name = arxiv.rewrite_arxiv_url(raw_url)
+    if not suggested_name:
+        suggested_name = arxiv_name
     parsed = urllib.parse.urlparse(raw_url)
 
     if info.filename:

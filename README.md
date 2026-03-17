@@ -38,6 +38,10 @@ fastapi dev server.py --host 0.0.0.0 --port 8000
   - Follows HTTP redirects.
   - Download starts in the background and returns immediately with a relative `url`.
   - Accessing the file while downloading returns `202 File is downloading`.
+  - Auto-rewrite helpers:
+    - arXiv `https://arxiv.org/abs/...` or `https://arxiv.org/html/...` are downloaded as `https://arxiv.org/pdf/...` with a `.pdf` filename.
+    - GitHub repo `https://github.com/{owner}/{repo}` is downloaded as `.../archive/refs/heads/master.zip` (or `.../tree/{branch}` to the branch zip).
+    - GitHub file `https://github.com/{owner}/{repo}/blob/{branch}/path` is downloaded as `.../raw/refs/heads/{branch}/path`.
 - `GET /url_status/{filename}`
   - Returns JSON status for a URL download: `status`, `downloaded`, `total`, `url`.
 - `GET /speed_test/download`
