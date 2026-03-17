@@ -45,8 +45,8 @@
 <body>
   <h1>Chunked Upload</h1>
   <div class="section">
-    <h2>Quick Text</h2>
-    <label for="textInput" class="small">Quick text to .txt</label>
+    <h2>Quick Text or Image Paste</h2>
+    <label for="textInput" class="small">Paste text to .txt, or paste images to upload</label>
     <textarea id="textInput" rows="6" style="width: 100%;"></textarea>
     <div class="row">
       <button type="button" id="saveTextBtn">Save as .txt</button>
@@ -629,6 +629,31 @@
       const name = randomId(6) + ".txt";
       const file = new File([text], name, { type: "text/plain" });
       await runUploads([file]);
+    });
+
+    document.getElementById("textInput").addEventListener("paste", async (e) => {
+      const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+      const imageItems = items.filter((item) => item.type && item.type.startsWith("image/"));
+      if (imageItems.length === 0) {
+        return;
+      }
+      e.preventDefault();
+      const files = [];
+      for (let i = 0; i < imageItems.length; i++) {
+        const blob = imageItems[i].getAsFile();
+        if (!blob) continue;
+        const type = blob.type || "image/png";
+        let ext = type.split("/")[1] || "png";
+        if (ext === "jpeg") ext = "jpg";
+        const suffix = imageItems.length > 1 ? "-" + (i + 1) : "";
+        const name = "paste-" + randomId(6) + suffix + "." + ext;
+        files.push(new File([blob], name, { type }));
+      }
+      if (files.length === 0) {
+        return;
+      }
+      log("Pasted image" + (files.length > 1 ? "s" : "") + ": " + files.map((f) => f.name).join(", "));
+      await runUploads(files);
     });
 
     document.getElementById("urlUploadBtn").addEventListener("click", async () => {

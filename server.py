@@ -389,6 +389,7 @@ def download_file(filename: str):
     media_type, _ = mimetypes.guess_type(file_path)
     if media_type and (
         media_type.startswith("text/")
+        or media_type.startswith("image/")
         or media_type in {"application/json", "application/xml", "application/javascript"}
     ):
         return FileResponse(
