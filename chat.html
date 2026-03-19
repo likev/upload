@@ -204,6 +204,7 @@
             <input type="checkbox" id="streamToggle" checked />
             Stream
           </label>
+          <button type="button" id="newChatBtn">New Chat</button>
           <button type="button" id="sendBtn">Send</button>
         </div>
       </section>
@@ -239,8 +240,10 @@
     const modelInput = document.getElementById("modelInput");
     const inputsInput = document.getElementById("inputsInput");
     const sendBtn = document.getElementById("sendBtn");
+    const newChatBtn = document.getElementById("newChatBtn");
     const requestView = document.getElementById("requestView");
     const responseView = document.getElementById("responseView");
+    const conversation = [];
 
     function addMessage(role, text) {
       const wrap = document.createElement("div");
@@ -264,6 +267,13 @@
       addMessage("error", text);
     }
 
+    function resetChat() {
+      conversation.length = 0;
+      messagesEl.innerHTML = "";
+      requestView.textContent = "No request yet.";
+      responseView.textContent = "No response yet.";
+    }
+
     async function readStream(response, bodyEl) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -285,7 +295,7 @@
             const data = line.slice(6);
             if (data === "[DONE]") {
               responseView.textContent = answer || "(empty)";
-              return;
+              return answer;
             }
             let parsed;
             try {
@@ -304,6 +314,7 @@
       }
 
       responseView.textContent = answer || "(empty)";
+      return answer;
     }
 
     async function sendMessage() {
@@ -318,11 +329,13 @@
         return;
       }
 
+      conversation.push({ role: "user", content: prompt });
+
       const payload = {
         model: modelInput.value.trim() || "upstream-chat",
         stream: streamToggle.checked,
         inputs: parsedInputs,
-        messages: [{ role: "user", content: prompt }]
+        messages: conversation.slice()
       };
 
       requestView.textContent = JSON.stringify(payload, null, 2);
@@ -345,7 +358,8 @@
 
         if (payload.stream) {
           const bodyEl = addMessage("assistant", "");
-          await readStream(response, bodyEl);
+          const answer = await readStream(response, bodyEl);
+          conversation.push({ role: "assistant", content: answer || "" });
           return;
         }
 
@@ -353,7 +367,9 @@
         responseView.textContent = JSON.stringify(data, null, 2);
         const answer = ((((data || {}).choices || [])[0] || {}).message || {}).content || "";
         addMessage("assistant", answer || "(empty)");
+        conversation.push({ role: "assistant", content: answer || "" });
       } catch (err) {
+        conversation.pop();
         const message = err && err.message ? err.message : String(err);
         responseView.textContent = message;
         addError(message);
@@ -363,6 +379,7 @@
     }
 
     sendBtn.addEventListener("click", sendMessage);
+    newChatBtn.addEventListener("click", resetChat);
     messageInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
