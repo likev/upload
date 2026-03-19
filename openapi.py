@@ -21,6 +21,7 @@ UPSTREAM_REFERER = os.environ.get(
     "OPENAPI_UPSTREAM_REFERER",
     "http://10.69.97.196/chatbot/2tgFXw32inAwYG4t",
 )
+UPSTREAM_TIMEOUT = float(os.environ.get("OPENAPI_UPSTREAM_TIMEOUT", "10"))
 CHAT_PATH = os.path.join(os.path.dirname(__file__), "chat.html")
 
 app = FastAPI()
@@ -91,7 +92,7 @@ def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
             body = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
