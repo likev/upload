@@ -67,13 +67,47 @@ def _extract_text_content(content: Union[str, List[MessagePart], None]) -> str:
 
 
 def _messages_to_query(messages: List[ChatMessage]) -> str:
-    user_messages = [msg for msg in messages if msg.role == "user"]
-    if user_messages:
-        return _extract_text_content(user_messages[-1].content).strip()
+    normalized = []
+    for msg in messages:
+        text = _extract_text_content(msg.content).strip()
+        if text:
+            normalized.append({"role": msg.role.lower(), "content": text})
 
-    text_parts = [_extract_text_content(msg.content).strip() for msg in messages]
-    query = "\n".join(part for part in text_parts if part)
-    return query.strip()
+    if not normalized:
+        return ""
+
+    if len(normalized) == 1:
+        return normalized[0]["content"]
+
+    system_parts = [msg["content"] for msg in normalized if msg["role"] == "system"]
+    dialogue_parts = [msg for msg in normalized if msg["role"] != "system"]
+
+    lines: List[str] = []
+    if system_parts:
+        lines.append("System instructions:")
+        lines.append("\n\n".join(system_parts))
+
+    if dialogue_parts:
+        if lines:
+            lines.append("")
+        lines.append("Conversation:")
+        for msg in dialogue_parts:
+            lines.append(f"{_role_label(msg['role'])}: {msg['content']}")
+
+    if dialogue_parts and dialogue_parts[-1]["role"] == "user":
+        lines.append("Assistant:")
+
+    return "\n".join(lines).strip()
+
+
+def _role_label(role: str) -> str:
+    if role == "assistant":
+        return "Assistant"
+    if role == "system":
+        return "System"
+    if role == "tool":
+        return "Tool"
+    return "User"
 
 
 def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
