@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat Proxy</title>
+  <style>
+    :root {
+      --bg: #f2eee5;
+      --bg-accent: #dcecf9;
+      --panel: rgba(255, 255, 255, 0.88);
+      --text: #1c2430;
+      --muted: #66707d;
+      --line: rgba(28, 36, 48, 0.12);
+      --strong: #0f766e;
+      --user: #1d4ed8;
+      --error: #b91c1c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(29, 78, 216, 0.12), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(15, 118, 110, 0.16), transparent 30%),
+        linear-gradient(145deg, var(--bg), var(--bg-accent));
+    }
+
+    .shell {
+      width: min(920px, calc(100vw - 32px));
+      margin: 24px auto;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: 0 24px 60px rgba(28, 36, 48, 0.10);
+      backdrop-filter: blur(12px);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 44px);
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .sub {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.35fr 0.65fr;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    label {
+      display: block;
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    textarea,
+    input,
+    button {
+      font: inherit;
+    }
+
+    textarea,
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.94);
+      color: var(--text);
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 96px;
+    }
+
+    .row {
+      margin-top: 14px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+
+    .checkbox {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    button {
+      border: 1px solid rgba(15, 118, 110, 0.22);
+      border-radius: 999px;
+      padding: 10px 16px;
+      color: white;
+      background: linear-gradient(135deg, #0f766e, #2563eb);
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    #messages {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 320px;
+    }
+
+    .message {
+      padding: 12px 14px;
+      border-radius: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--line);
+    }
+
+    .message.user {
+      background: rgba(29, 78, 216, 0.08);
+      border-color: rgba(29, 78, 216, 0.18);
+    }
+
+    .message.assistant {
+      background: rgba(15, 118, 110, 0.08);
+      border-color: rgba(15, 118, 110, 0.18);
+    }
+
+    .message.error {
+      background: rgba(185, 28, 28, 0.08);
+      border-color: rgba(185, 28, 28, 0.18);
+      color: var(--error);
+    }
+
+    .meta {
+      margin-bottom: 6px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 840px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <h1>Chat Proxy</h1>
+    <p class="sub">Test <code>/v1/chat/completions</code> in stream and non-stream modes.</p>
+
+    <div class="grid">
+      <section class="panel">
+        <div id="messages"></div>
+
+        <div class="row">
+          <label for="messageInput">Message</label>
+          <textarea id="messageInput" placeholder="Ask something"></textarea>
+        </div>
+
+        <div class="controls">
+          <label class="checkbox">
+            <input type="checkbox" id="streamToggle" checked />
+            Stream
+          </label>
+          <button type="button" id="sendBtn">Send</button>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="row" style="margin-top: 0;">
+          <label for="modelInput">Model</label>
+          <input type="text" id="modelInput" value="upstream-chat" />
+        </div>
+
+        <div class="row">
+          <label for="inputsInput">Inputs JSON</label>
+          <textarea id="inputsInput">{}</textarea>
+        </div>
+
+        <div class="row">
+          <label>Last Request</label>
+          <pre id="requestView">No request yet.</pre>
+        </div>
+
+        <div class="row">
+          <label>Last Response</label>
+          <pre id="responseView">No response yet.</pre>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const messageInput = document.getElementById("messageInput");
+    const streamToggle = document.getElementById("streamToggle");
+    const modelInput = document.getElementById("modelInput");
+    const inputsInput = document.getElementById("inputsInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const requestView = document.getElementById("requestView");
+    const responseView = document.getElementById("responseView");
+
+    function addMessage(role, text) {
+      const wrap = document.createElement("div");
+      wrap.className = "message " + role;
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = role;
+
+      const body = document.createElement("div");
+      body.textContent = text;
+
+      wrap.appendChild(meta);
+      wrap.appendChild(body);
+      messagesEl.appendChild(wrap);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return body;
+    }
+
+    function addError(text) {
+      addMessage("error", text);
+    }
+
+    async function readStream(response, bodyEl) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer = "";
+
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        buffer += decoder.decode(result.value, { stream: true });
+
+        while (buffer.includes("\n\n")) {
+          const splitAt = buffer.indexOf("\n\n");
+          const rawEvent = buffer.slice(0, splitAt);
+          buffer = buffer.slice(splitAt + 2);
+
+          for (const line of rawEvent.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6);
+            if (data === "[DONE]") {
+              responseView.textContent = answer || "(empty)";
+              return;
+            }
+            let parsed;
+            try {
+              parsed = JSON.parse(data);
+            } catch (err) {
+              continue;
+            }
+            const delta = (((parsed || {}).choices || [])[0] || {}).delta || {};
+            if (typeof delta.content === "string") {
+              answer += delta.content;
+              bodyEl.textContent = answer;
+              messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+          }
+        }
+      }
+
+      responseView.textContent = answer || "(empty)";
+    }
+
+    async function sendMessage() {
+      const prompt = messageInput.value.trim();
+      if (!prompt) return;
+
+      let parsedInputs = {};
+      try {
+        parsedInputs = JSON.parse(inputsInput.value || "{}");
+      } catch (err) {
+        addError("Inputs JSON is invalid.");
+        return;
+      }
+
+      const payload = {
+        model: modelInput.value.trim() || "upstream-chat",
+        stream: streamToggle.checked,
+        inputs: parsedInputs,
+        messages: [{ role: "user", content: prompt }]
+      };
+
+      requestView.textContent = JSON.stringify(payload, null, 2);
+      responseView.textContent = "Waiting...";
+      addMessage("user", prompt);
+      messageInput.value = "";
+      sendBtn.disabled = true;
+
+      try {
+        const response = await fetch("./v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || ("HTTP " + response.status));
+        }
+
+        if (payload.stream) {
+          const bodyEl = addMessage("assistant", "");
+          await readStream(response, bodyEl);
+          return;
+        }
+
+        const data = await response.json();
+        responseView.textContent = JSON.stringify(data, null, 2);
+        const answer = ((((data || {}).choices || [])[0] || {}).message || {}).content || "";
+        addMessage("assistant", answer || "(empty)");
+      } catch (err) {
+        const message = err && err.message ? err.message : String(err);
+        responseView.textContent = message;
+        addError(message);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    messageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>

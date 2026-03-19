@@ -7,14 +7,32 @@ import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 UPSTREAM_URL = os.environ.get("OPENAPI_UPSTREAM_URL", "http://example.com/api/chat-messages")
 DEFAULT_MODEL = os.environ.get("OPENAPI_DEFAULT_MODEL", "upstream-chat")
 STREAM_CHUNK_SIZE = max(1, int(os.environ.get("OPENAPI_STREAM_CHUNK_SIZE", "32")))
+UPSTREAM_AUTHORIZATION = os.environ.get(
+    "OPENAPI_UPSTREAM_AUTHORIZATION",
+    "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1NzUzNTc1OC03M2YwLTQzYWQtODZjNS1lNzYxYTJhZWM4ZTkiLCJzdWIiOiJXZWIgQVBJIFBhc3Nwb3J0IiwiYXBwX2lkIjoiNTc1MzU3NTgtNzNmMC00M2FkLTg2YzUtZTc2MWEyYWVjOGU5IiwiYXBwX2NvZGUiOiIydGdGWHczMmluQXdZRzR0IiwiZW5kX3VzZXJfaWQiOiIxNjZiYzcyNi04YjlkLTRiZDYtOGUxNC0yMWRlMDI0YjU4ZjUifQ.bqVBdlCzFwzCGE4JfsPMMDr7pq0GXnCnx23YbX0PFYk",
+)
+UPSTREAM_REFERER = os.environ.get(
+    "OPENAPI_UPSTREAM_REFERER",
+    "http://10.69.97.196/chatbot/2tgFXw32inAwYG4t",
+)
+CHAT_PATH = os.path.join(os.path.dirname(__file__), "chat.html")
 
 app = FastAPI()
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page():
+    try:
+        with open(CHAT_PATH, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except OSError:
+        raise HTTPException(status_code=404, detail="chat.html not found")
 
 
 class MessagePart(BaseModel):
@@ -59,10 +77,16 @@ def _messages_to_query(messages: List[ChatMessage]) -> str:
 
 def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
     payload = json.dumps({"query": query, "inputs": inputs}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if UPSTREAM_AUTHORIZATION:
+        headers["authorization"] = UPSTREAM_AUTHORIZATION
+    if UPSTREAM_REFERER:
+        headers["Referer"] = UPSTREAM_REFERER
+
     req = urllib.request.Request(
         UPSTREAM_URL,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
