@@ -36,6 +36,22 @@ def chat_page():
         raise HTTPException(status_code=404, detail="chat.html not found")
 
 
+@app.get("/v1/models")
+def list_models():
+    created = int(time.time())
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": DEFAULT_MODEL,
+                "object": "model",
+                "created": created,
+                "owned_by": "openapi-proxy",
+            }
+        ],
+    }
+
+
 class MessagePart(BaseModel):
     type: str
     text: Optional[str] = None

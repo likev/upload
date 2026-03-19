@@ -12,6 +12,7 @@ from typing import List, Optional
 
 import arxiv
 import github
+import header
 import twitter_article
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
@@ -38,6 +39,14 @@ def help_readme():
             return PlainTextResponse(f.read())
     except OSError:
         return PlainTextResponse("README not found\n", status_code=404)
+
+
+@app.api_route(
+    "/header",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def show_headers(request: Request):
+    return header.build_header_response(request)
 
 
 @app.get("/rm/{pattern}")

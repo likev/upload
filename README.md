@@ -38,6 +38,9 @@ fastapi dev server.py --host 0.0.0.0 --port 8000
   - Chunked HTML upload form (loads `index.html`).
 - `GET /help`
   - Returns this README as plain text.
+- `GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD /header`
+  - Returns the received request headers as JSON.
+  - If the request includes an `Origin` header, the response mirrors it in CORS headers so browser requests from that site can read the result.
 - `POST /check/chunk`
   - JSON body: `filename`, `block_id`, `block_md5`, `block_size`, optional `total_size`.
   - Response: `{ "exists": true|false }` based on MD5 match at the expected offset.
