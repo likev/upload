@@ -39,14 +39,6 @@ COMMAND_PREFIXES = {
     "wget",
 }
 TOOL_NAME = "bash"
-TOOL_USE_FORMAT_TIP = """# Tool Use Respond Format
-If you need run bash/tool commands in the user system, respond with XML only, no explanation or extra details.
-The tool response must always include all three fields: name, command, and description.
-
-<example>
-user: what files are in the directory src/?
-assistant: <tool><name>bash</name><command>ls -alh src/</command><description>list all files</description></tool>
-</example>"""
 UPSTREAM_AUTHORIZATION = os.environ.get(
     "OPENAPI_UPSTREAM_AUTHORIZATION",
     "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1NzUzNTc1OC03M2YwLTQzYWQtODZjNS1lNzYxYTJhZWM4ZTkiLCJzdWIiOiJXZWIgQVBJIFBhc3Nwb3J0IiwiYXBwX2lkIjoiNTc1MzU3NTgtNzNmMC00M2FkLTg2YzUtZTc2MWEyYWVjOGU5IiwiYXBwX2NvZGUiOiIydGdGWHczMmluQXdZRzR0IiwiZW5kX3VzZXJfaWQiOiIxNjZiYzcyNi04YjlkLTRiZDYtOGUxNC0yMWRlMDI0YjU4ZjUifQ.bqVBdlCzFwzCGE4JfsPMMDr7pq0GXnCnx23YbX0PFYk",
@@ -106,6 +98,17 @@ class ToolCallMessage(BaseModel):
     function: ToolFunction
 
 
+class ToolDefinitionFunction(BaseModel):
+    name: str
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+
+
+class ToolDefinition(BaseModel):
+    type: str = "function"
+    function: ToolDefinitionFunction
+
+
 class ChatMessage(BaseModel):
     role: str
     content: Union[str, List[MessagePart], None] = None
@@ -119,6 +122,7 @@ class ChatCompletionsRequest(BaseModel):
     messages: List[ChatMessage]
     stream: bool = False
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    tools: Optional[List[ToolDefinition]] = None
 
 
 def _extract_text_content(content: Union[str, List[MessagePart], None]) -> str:
@@ -134,7 +138,7 @@ def _extract_text_content(content: Union[str, List[MessagePart], None]) -> str:
     return "".join(parts)
 
 
-def _messages_to_query(messages: List[ChatMessage]) -> str:
+def _messages_to_query(messages: List[ChatMessage], tools: Optional[List[ToolDefinition]] = None) -> str:
     normalized = []
     for msg in messages:
         role = msg.role.lower()
@@ -162,7 +166,7 @@ def _messages_to_query(messages: List[ChatMessage]) -> str:
         return ""
 
     if len(normalized) == 1:
-        return _prepend_tool_use_tip(normalized[0]["content"])
+        return _prepend_tool_use_tip(normalized[0]["content"], tools)
 
     system_parts = [msg["content"] for msg in normalized if msg["role"] == "system"]
     dialogue_parts = [msg for msg in normalized if msg["role"] != "system"]
@@ -182,7 +186,7 @@ def _messages_to_query(messages: List[ChatMessage]) -> str:
     if dialogue_parts and dialogue_parts[-1]["role"] == "user":
         lines.append("Assistant:")
 
-    return _prepend_tool_use_tip("\n".join(lines).strip())
+    return _prepend_tool_use_tip("\n".join(lines).strip(), tools)
 
 
 def _role_label(role: str) -> str:
@@ -195,11 +199,69 @@ def _role_label(role: str) -> str:
     return "User"
 
 
-def _prepend_tool_use_tip(query: str) -> str:
+def _prepend_tool_use_tip(query: str, tools: Optional[List[ToolDefinition]] = None) -> str:
+    tip = _build_tool_use_tip(tools)
     query = query.strip()
     if not query:
-        return TOOL_USE_FORMAT_TIP
-    return f"{TOOL_USE_FORMAT_TIP}\n\n{query}"
+        return tip
+    if not tip:
+        return query
+    return f"{tip}\n\n{query}"
+
+
+def _build_tool_use_tip(tools: Optional[List[ToolDefinition]]) -> str:
+    if not tools:
+        return ""
+
+    lines = [
+        "# Tool Use Respond Format",
+        "If you need to use a declared tool/function, respond with XML only, no explanation or extra details.",
+        "The tool response must always include all three fields: name, command, and description.",
+        "Use only tool names declared in this request.",
+        "For bash, put the shell command string in command.",
+        "For other tools/functions, put a JSON object string with the function arguments in command.",
+        "",
+        "Available tools:",
+    ]
+
+    for tool in tools:
+        if tool.type != "function":
+            continue
+        lines.append(_tool_definition_line(tool))
+
+    lines.extend(
+        [
+            "",
+            "<example>",
+            "user: what files are in the directory src/?",
+            "assistant: <tool><name>bash</name><command>ls -alh src/</command><description>list all files</description></tool>",
+            "</example>",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _tool_definition_line(tool: ToolDefinition) -> str:
+    name = tool.function.name
+    description = (tool.function.description or "").strip()
+    parameter_names = _tool_parameter_names(tool)
+
+    line = f"- {name}"
+    if description:
+        line += f": {description}"
+    if parameter_names:
+        line += f" | arguments: {', '.join(parameter_names)}"
+    return line
+
+
+def _tool_parameter_names(tool: ToolDefinition) -> List[str]:
+    parameters = tool.function.parameters
+    if not isinstance(parameters, dict):
+        return []
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    return [str(name) for name in properties.keys()]
 
 
 def _assistant_tool_call_text(tool_call: ToolCallMessage) -> str:
@@ -306,7 +368,7 @@ def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_completion_response(request: ChatCompletionsRequest, answer: str, completion_id: str) -> Dict[str, Any]:
     created = int(time.time())
-    tool_call = _tool_call_from_answer(answer)
+    tool_call = _tool_call_from_answer(answer, request.tools)
     message: Dict[str, Any] = {"role": "assistant", "content": answer}
     finish_reason = "stop"
     if tool_call:
@@ -345,7 +407,7 @@ def _sse_event(payload: Dict[str, Any]) -> str:
 
 def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: str):
     created = int(time.time())
-    tool_call = _tool_call_from_answer(answer)
+    tool_call = _tool_call_from_answer(answer, request.tools)
 
     def _gen():
         yield _sse_event(
@@ -429,14 +491,17 @@ def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: s
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-def _tool_call_from_answer(answer: str) -> Optional[Dict[str, Any]]:
-    xml_tool_call = _xml_tool_call(answer)
+def _tool_call_from_answer(answer: str, tools: Optional[List[ToolDefinition]] = None) -> Optional[Dict[str, Any]]:
+    if not tools:
+        return None
+
+    xml_tool_call = _xml_tool_call(answer, tools)
     if xml_tool_call:
         return xml_tool_call
-    return _command_tool_call(answer)
+    return _command_tool_call(answer, tools)
 
 
-def _xml_tool_call(answer: str) -> Optional[Dict[str, Any]]:
+def _xml_tool_call(answer: str, tools: Optional[List[ToolDefinition]] = None) -> Optional[Dict[str, Any]]:
     text = answer.strip()
     if not text:
         return None
@@ -447,14 +512,15 @@ def _xml_tool_call(answer: str) -> Optional[Dict[str, Any]]:
 
     block = tool_match.group(1)
     name = _extract_xml_field(block, "name") or TOOL_NAME
+    tool_def = _find_tool_definition(tools, name)
+    if tool_def is None:
+        return None
     command = _extract_xml_field(block, "command")
     description = _extract_xml_field(block, "description")
     if not command:
         return None
 
-    arguments: Dict[str, Any] = {"command": command}
-    if description:
-        arguments["description"] = description
+    arguments = _tool_arguments_from_xml(tool_def, command, description)
 
     return {
         "id": f"call_{uuid.uuid4().hex}",
@@ -480,28 +546,88 @@ def _extract_xml_field(block: str, field: str) -> Optional[str]:
     return value.strip()
 
 
-def _command_tool_call(answer: str) -> Optional[Dict[str, Any]]:
+def _command_tool_call(answer: str, tools: Optional[List[ToolDefinition]] = None) -> Optional[Dict[str, Any]]:
     command = answer.strip()
     if not command:
+        return None
+
+    bash_tool = _find_tool_definition(tools, TOOL_NAME)
+    if bash_tool is None:
         return None
 
     first_token = command.split(None, 1)[0].lower()
     if first_token not in COMMAND_PREFIXES:
         return None
 
+    arguments = _tool_arguments_from_xml(bash_tool, command, "")
     return {
         "id": f"call_{uuid.uuid4().hex}",
         "type": "function",
         "function": {
             "name": TOOL_NAME,
-            "arguments": json.dumps({"command": command}, ensure_ascii=False),
+            "arguments": json.dumps(arguments, ensure_ascii=False),
         },
     }
 
 
+def _find_tool_definition(tools: Optional[List[ToolDefinition]], name: str) -> Optional[ToolDefinition]:
+    if not tools:
+        return None
+    for tool in tools:
+        if tool.type == "function" and tool.function.name == name:
+            return tool
+    return None
+
+
+def _tool_arguments_from_xml(
+    tool: ToolDefinition,
+    command: str,
+    description: Optional[str],
+) -> Dict[str, Any]:
+    stripped_command = command.strip()
+    parsed_json = _json_object_or_none(stripped_command)
+    if parsed_json is not None:
+        return parsed_json
+
+    arguments: Dict[str, Any] = {}
+    if _tool_accepts_argument(tool, "command") or tool.function.name == TOOL_NAME:
+        arguments["command"] = stripped_command
+    elif _tool_accepts_argument(tool, "input"):
+        arguments["input"] = stripped_command
+    else:
+        arguments["command"] = stripped_command
+
+    cleaned_description = (description or "").strip()
+    if cleaned_description and _tool_accepts_argument(tool, "description"):
+        arguments["description"] = cleaned_description
+    return arguments
+
+
+def _json_object_or_none(value: str) -> Optional[Dict[str, Any]]:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _tool_accepts_argument(tool: ToolDefinition, name: str) -> bool:
+    parameters = tool.function.parameters
+    if not isinstance(parameters, dict):
+        return False
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    return name in properties
+
+
 @app.post("/v1/chat/completions")
 def chat_completions(request: ChatCompletionsRequest):
-    query = _messages_to_query(request.messages)
+    query = _messages_to_query(request.messages, request.tools)
     if not query:
         raise HTTPException(status_code=400, detail="No usable message content found")
 
