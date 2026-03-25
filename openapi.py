@@ -38,6 +38,13 @@ COMMAND_PREFIXES = {
     "wget",
 }
 TOOL_NAME = "run_linux_command"
+TOOL_USE_FORMAT_TIP = """# Tool Use Respond Format
+If you need run bash/tool commands in the user system, only output the full command, no explanation or details.
+
+<example>
+user: what files are in the directory src/?
+assistant: ls -alh src/
+</example>"""
 UPSTREAM_AUTHORIZATION = os.environ.get(
     "OPENAPI_UPSTREAM_AUTHORIZATION",
     "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1NzUzNTc1OC03M2YwLTQzYWQtODZjNS1lNzYxYTJhZWM4ZTkiLCJzdWIiOiJXZWIgQVBJIFBhc3Nwb3J0IiwiYXBwX2lkIjoiNTc1MzU3NTgtNzNmMC00M2FkLTg2YzUtZTc2MWEyYWVjOGU5IiwiYXBwX2NvZGUiOiIydGdGWHczMmluQXdZRzR0IiwiZW5kX3VzZXJfaWQiOiIxNjZiYzcyNi04YjlkLTRiZDYtOGUxNC0yMWRlMDI0YjU4ZjUifQ.bqVBdlCzFwzCGE4JfsPMMDr7pq0GXnCnx23YbX0PFYk",
@@ -118,7 +125,7 @@ def _messages_to_query(messages: List[ChatMessage]) -> str:
         return ""
 
     if len(normalized) == 1:
-        return normalized[0]["content"]
+        return _prepend_tool_use_tip(normalized[0]["content"])
 
     system_parts = [msg["content"] for msg in normalized if msg["role"] == "system"]
     dialogue_parts = [msg for msg in normalized if msg["role"] != "system"]
@@ -138,7 +145,7 @@ def _messages_to_query(messages: List[ChatMessage]) -> str:
     if dialogue_parts and dialogue_parts[-1]["role"] == "user":
         lines.append("Assistant:")
 
-    return "\n".join(lines).strip()
+    return _prepend_tool_use_tip("\n".join(lines).strip())
 
 
 def _role_label(role: str) -> str:
@@ -149,6 +156,13 @@ def _role_label(role: str) -> str:
     if role == "tool":
         return "Tool"
     return "User"
+
+
+def _prepend_tool_use_tip(query: str) -> str:
+    query = query.strip()
+    if not query:
+        return TOOL_USE_FORMAT_TIP
+    return f"{TOOL_USE_FORMAT_TIP}\n\n{query}"
 
 
 def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
