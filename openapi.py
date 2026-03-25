@@ -95,9 +95,23 @@ class MessagePart(BaseModel):
     text: Optional[str] = None
 
 
+class ToolFunction(BaseModel):
+    name: str
+    arguments: Union[str, Dict[str, Any], None] = None
+
+
+class ToolCallMessage(BaseModel):
+    id: Optional[str] = None
+    type: str = "function"
+    function: ToolFunction
+
+
 class ChatMessage(BaseModel):
     role: str
     content: Union[str, List[MessagePart], None] = None
+    tool_calls: Optional[List[ToolCallMessage]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
 
 
 class ChatCompletionsRequest(BaseModel):
@@ -123,9 +137,26 @@ def _extract_text_content(content: Union[str, List[MessagePart], None]) -> str:
 def _messages_to_query(messages: List[ChatMessage]) -> str:
     normalized = []
     for msg in messages:
+        role = msg.role.lower()
         text = _extract_text_content(msg.content).strip()
+
+        if role == "assistant" and msg.tool_calls:
+            if text:
+                normalized.append({"role": role, "content": text})
+            for tool_call in msg.tool_calls:
+                tool_text = _assistant_tool_call_text(tool_call)
+                if tool_text:
+                    normalized.append({"role": role, "content": tool_text})
+            continue
+
+        if role == "tool":
+            tool_text = _tool_result_text(msg, text)
+            if tool_text:
+                normalized.append({"role": role, "content": tool_text})
+            continue
+
         if text:
-            normalized.append({"role": msg.role.lower(), "content": text})
+            normalized.append({"role": role, "content": text})
 
     if not normalized:
         return ""
@@ -169,6 +200,74 @@ def _prepend_tool_use_tip(query: str) -> str:
     if not query:
         return TOOL_USE_FORMAT_TIP
     return f"{TOOL_USE_FORMAT_TIP}\n\n{query}"
+
+
+def _assistant_tool_call_text(tool_call: ToolCallMessage) -> str:
+    if tool_call.type != "function":
+        return ""
+
+    arguments = _parse_tool_arguments(tool_call.function.arguments)
+    command = str(arguments.get("command", "")).strip()
+    description = str(arguments.get("description", "")).strip()
+    name = tool_call.function.name.strip() or TOOL_NAME
+
+    if not command:
+        raw_arguments = tool_call.function.arguments
+        if isinstance(raw_arguments, str):
+            command = raw_arguments.strip()
+        elif isinstance(raw_arguments, dict):
+            command = json.dumps(raw_arguments, ensure_ascii=False)
+
+    parts = [
+        "<tool>",
+        f"<name>{_xml_escape(name)}</name>",
+        f"<command>{_xml_escape(command)}</command>",
+        f"<description>{_xml_escape(description)}</description>",
+        "</tool>",
+    ]
+    text = "".join(parts)
+    if tool_call.id:
+        return f"{text} [tool_call_id={tool_call.id}]"
+    return text
+
+
+def _tool_result_text(msg: ChatMessage, text: str) -> str:
+    lines: List[str] = []
+    if msg.tool_call_id:
+        lines.append(f"tool_call_id: {msg.tool_call_id}")
+    if msg.name:
+        lines.append(f"name: {msg.name}")
+    if text:
+        lines.append("result:")
+        lines.append(text)
+    return "\n".join(lines).strip()
+
+
+def _parse_tool_arguments(arguments: Union[str, Dict[str, Any], None]) -> Dict[str, Any]:
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        return {}
+
+    text = arguments.strip()
+    if not text:
+        return {}
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"command": text}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"command": text}
+
+
+def _xml_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
 
 
 def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
