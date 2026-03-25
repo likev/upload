@@ -58,8 +58,8 @@ UPSTREAM_REFERER = os.environ.get(
 UPSTREAM_TIMEOUT = float(os.environ.get("OPENAPI_UPSTREAM_TIMEOUT", "10"))
 STREAM_TOOL_CALL_FINISH_REASON = os.environ.get(
     "OPENAPI_STREAM_TOOL_CALL_FINISH_REASON",
-    "stop",
-).strip() or "stop"
+    "tool_calls",
+).strip() or "tool_calls"
 CHAT_PATH = os.path.join(os.path.dirname(__file__), "chat.html")
 
 app = FastAPI()
