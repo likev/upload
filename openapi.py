@@ -54,6 +54,10 @@ UPSTREAM_REFERER = os.environ.get(
     "http://10.69.97.196/chatbot/2tgFXw32inAwYG4t",
 )
 UPSTREAM_TIMEOUT = float(os.environ.get("OPENAPI_UPSTREAM_TIMEOUT", "10"))
+STREAM_TOOL_CALL_FINISH_REASON = os.environ.get(
+    "OPENAPI_STREAM_TOOL_CALL_FINISH_REASON",
+    "stop",
+).strip() or "stop"
 CHAT_PATH = os.path.join(os.path.dirname(__file__), "chat.html")
 
 app = FastAPI()
@@ -287,7 +291,13 @@ def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: s
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": request.model,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": STREAM_TOOL_CALL_FINISH_REASON,
+                        }
+                    ],
                 }
             )
             yield "data: [DONE]\n\n"
