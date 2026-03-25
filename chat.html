@@ -226,6 +226,34 @@
         </div>
 
         <div class="row">
+          <label class="checkbox">
+            <input type="checkbox" id="toolsToggle" checked />
+            Enable Tools
+          </label>
+        </div>
+
+        <div class="row">
+          <label for="toolsInput">Tools JSON</label>
+          <textarea id="toolsInput">[
+  {
+    "type": "function",
+    "function": {
+      "name": "bash",
+      "description": "Run a shell command on the user system",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "required": ["command", "description"]
+      }
+    }
+  }
+]</textarea>
+        </div>
+
+        <div class="row">
           <label>Last Request</label>
           <pre id="requestView">No request yet.</pre>
         </div>
@@ -244,6 +272,8 @@
     const streamToggle = document.getElementById("streamToggle");
     const modelInput = document.getElementById("modelInput");
     const inputsInput = document.getElementById("inputsInput");
+    const toolsToggle = document.getElementById("toolsToggle");
+    const toolsInput = document.getElementById("toolsInput");
     const sendBtn = document.getElementById("sendBtn");
     const newChatBtn = document.getElementById("newChatBtn");
     const requestView = document.getElementById("requestView");
@@ -394,11 +424,24 @@
       if (!prompt) return;
 
       let parsedInputs = {};
+      let parsedTools = null;
       try {
         parsedInputs = JSON.parse(inputsInput.value || "{}");
       } catch (err) {
         addError("Inputs JSON is invalid.");
         return;
+      }
+
+      if (toolsToggle.checked) {
+        try {
+          parsedTools = JSON.parse(toolsInput.value || "[]");
+          if (!Array.isArray(parsedTools)) {
+            throw new Error("Tools JSON must be an array.");
+          }
+        } catch (err) {
+          addError("Tools JSON is invalid.");
+          return;
+        }
       }
 
       conversation.push({ role: "user", content: prompt });
@@ -409,6 +452,9 @@
         inputs: parsedInputs,
         messages: conversation.slice()
       };
+      if (toolsToggle.checked) {
+        payload.tools = parsedTools;
+      }
 
       requestView.textContent = JSON.stringify(payload, null, 2);
       responseView.textContent = "Waiting...";
