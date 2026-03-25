@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -37,13 +38,13 @@ COMMAND_PREFIXES = {
     "touch",
     "wget",
 }
-TOOL_NAME = "run_linux_command"
+TOOL_NAME = "bash"
 TOOL_USE_FORMAT_TIP = """# Tool Use Respond Format
-If you need run bash/tool commands in the user system, only output the full command, no explanation or details.
+If you need run bash/tool commands in the user system, respond with XML only, no explanation or extra details.
 
 <example>
 user: what files are in the directory src/?
-assistant: ls -alh src/
+assistant: <tool><name>bash</name><command>ls -alh src/</command><description>list all files</description></tool>
 </example>"""
 UPSTREAM_AUTHORIZATION = os.environ.get(
     "OPENAPI_UPSTREAM_AUTHORIZATION",
@@ -205,7 +206,7 @@ def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_completion_response(request: ChatCompletionsRequest, answer: str, completion_id: str) -> Dict[str, Any]:
     created = int(time.time())
-    tool_call = _command_tool_call(answer)
+    tool_call = _tool_call_from_answer(answer)
     message: Dict[str, Any] = {"role": "assistant", "content": answer}
     finish_reason = "stop"
     if tool_call:
@@ -244,7 +245,7 @@ def _sse_event(payload: Dict[str, Any]) -> str:
 
 def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: str):
     created = int(time.time())
-    tool_call = _command_tool_call(answer)
+    tool_call = _tool_call_from_answer(answer)
 
     def _gen():
         yield _sse_event(
@@ -326,6 +327,57 @@ def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: s
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _tool_call_from_answer(answer: str) -> Optional[Dict[str, Any]]:
+    xml_tool_call = _xml_tool_call(answer)
+    if xml_tool_call:
+        return xml_tool_call
+    return _command_tool_call(answer)
+
+
+def _xml_tool_call(answer: str) -> Optional[Dict[str, Any]]:
+    text = answer.strip()
+    if not text:
+        return None
+
+    tool_match = re.search(r"<tool>(.*?)</tool>", text, flags=re.IGNORECASE | re.DOTALL)
+    if not tool_match:
+        return None
+
+    block = tool_match.group(1)
+    name = _extract_xml_field(block, "name") or TOOL_NAME
+    command = _extract_xml_field(block, "command")
+    description = _extract_xml_field(block, "description")
+    if not command:
+        return None
+
+    arguments: Dict[str, Any] = {"command": command}
+    if description:
+        arguments["description"] = description
+
+    return {
+        "id": f"call_{uuid.uuid4().hex}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(arguments, ensure_ascii=False),
+        },
+    }
+
+
+def _extract_xml_field(block: str, field: str) -> Optional[str]:
+    match = re.search(
+        rf"<{field}>(.*?)</{field}>|<{field}>(.*?)<{field}\s*/>",
+        block,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return None
+    value = match.group(1) if match.group(1) is not None else match.group(2)
+    if value is None:
+        return None
+    return value.strip()
 
 
 def _command_tool_call(answer: str) -> Optional[Dict[str, Any]]:
