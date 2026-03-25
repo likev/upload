@@ -13,6 +13,31 @@ from pydantic import BaseModel, Field
 UPSTREAM_URL = os.environ.get("OPENAPI_UPSTREAM_URL", "http://example.com/api/chat-messages")
 DEFAULT_MODEL = os.environ.get("OPENAPI_DEFAULT_MODEL", "upstream-chat")
 STREAM_CHUNK_SIZE = max(1, int(os.environ.get("OPENAPI_STREAM_CHUNK_SIZE", "32")))
+COMMAND_PREFIXES = {
+    "cat",
+    "cd",
+    "chmod",
+    "cp",
+    "curl",
+    "echo",
+    "find",
+    "git",
+    "grep",
+    "head",
+    "less",
+    "ln",
+    "ls",
+    "mkdir",
+    "mv",
+    "pwd",
+    "rm",
+    "sed",
+    "tail",
+    "tar",
+    "touch",
+    "wget",
+}
+TOOL_NAME = "run_linux_command"
 UPSTREAM_AUTHORIZATION = os.environ.get(
     "OPENAPI_UPSTREAM_AUTHORIZATION",
     "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1NzUzNTc1OC03M2YwLTQzYWQtODZjNS1lNzYxYTJhZWM4ZTkiLCJzdWIiOiJXZWIgQVBJIFBhc3Nwb3J0IiwiYXBwX2lkIjoiNTc1MzU3NTgtNzNmMC00M2FkLTg2YzUtZTc2MWEyYWVjOGU5IiwiYXBwX2NvZGUiOiIydGdGWHczMmluQXdZRzR0IiwiZW5kX3VzZXJfaWQiOiIxNjZiYzcyNi04YjlkLTRiZDYtOGUxNC0yMWRlMDI0YjU4ZjUifQ.bqVBdlCzFwzCGE4JfsPMMDr7pq0GXnCnx23YbX0PFYk",
@@ -162,6 +187,13 @@ def _call_upstream(query: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_completion_response(request: ChatCompletionsRequest, answer: str, completion_id: str) -> Dict[str, Any]:
     created = int(time.time())
+    tool_call = _command_tool_call(answer)
+    message: Dict[str, Any] = {"role": "assistant", "content": answer}
+    finish_reason = "stop"
+    if tool_call:
+        message = {"role": "assistant", "content": None, "tool_calls": [tool_call]}
+        finish_reason = "tool_calls"
+
     return {
         "id": completion_id,
         "object": "chat.completion",
@@ -170,8 +202,8 @@ def _build_completion_response(request: ChatCompletionsRequest, answer: str, com
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": answer},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
@@ -194,6 +226,7 @@ def _sse_event(payload: Dict[str, Any]) -> str:
 
 def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: str):
     created = int(time.time())
+    tool_call = _command_tool_call(answer)
 
     def _gen():
         yield _sse_event(
@@ -205,6 +238,46 @@ def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: s
                 "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
             }
         )
+
+        if tool_call:
+            yield _sse_event(
+                {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": tool_call["id"],
+                                        "type": "function",
+                                        "function": {
+                                            "name": tool_call["function"]["name"],
+                                            "arguments": tool_call["function"]["arguments"],
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            yield _sse_event(
+                {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                }
+            )
+            yield "data: [DONE]\n\n"
+            return
 
         for piece in _stream_chunks(answer, STREAM_CHUNK_SIZE):
             yield _sse_event(
@@ -229,6 +302,25 @@ def _build_stream(request: ChatCompletionsRequest, answer: str, completion_id: s
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _command_tool_call(answer: str) -> Optional[Dict[str, Any]]:
+    command = answer.strip()
+    if not command:
+        return None
+
+    first_token = command.split(None, 1)[0].lower()
+    if first_token not in COMMAND_PREFIXES:
+        return None
+
+    return {
+        "id": f"call_{uuid.uuid4().hex}",
+        "type": "function",
+        "function": {
+            "name": TOOL_NAME,
+            "arguments": json.dumps({"command": command}, ensure_ascii=False),
+        },
+    }
 
 
 @app.post("/v1/chat/completions")
