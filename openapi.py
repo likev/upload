@@ -41,6 +41,7 @@ COMMAND_PREFIXES = {
 TOOL_NAME = "bash"
 TOOL_USE_FORMAT_TIP = """# Tool Use Respond Format
 If you need run bash/tool commands in the user system, respond with XML only, no explanation or extra details.
+The tool response must always include all three fields: name, command, and description.
 
 <example>
 user: what files are in the directory src/?
